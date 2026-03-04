@@ -121,7 +121,6 @@ def get_loader(test_paths: wptcommandline.TestPaths,
                                         chunk_number=kwargs["this_chunk"],
                                         include_https=ssl_enabled,
                                         include_h2=h2_enabled,
-                                        include_webtransport_h3=kwargs["enable_webtransport_h3"],
                                         skip_timeout=kwargs["skip_timeout"],
                                         skip_crash=kwargs["skip_crash"],
                                         skip_implementation_status=kwargs["skip_implementation_status"],
@@ -568,14 +567,14 @@ def check_stability(**kwargs):
                                      **kwargs)
 
 
-def start(**kwargs):
+def start(**kwargs: Any) -> int:
     assert logger is not None
 
     logged_critical = wptlogging.LoggedAboveLevelHandler("CRITICAL")
     handler = handlers.LogLevelFilter(logged_critical, "CRITICAL")
     logger.add_handler(handler)
 
-    rv = False
+    rv = 0
     try:
         if kwargs["list_test_groups"]:
             list_test_groups(**kwargs)
@@ -586,12 +585,19 @@ def start(**kwargs):
         elif kwargs["list_tests_json"]:
             list_tests_json(**kwargs)
         elif kwargs["verify"] or kwargs["stability"]:
-            rv = check_stability(**kwargs) or logged_critical.has_log
+            rv = check_stability(**kwargs) or 0
         else:
-            rv = not run_tests(**kwargs)[0] or logged_critical.has_log
+            rv = int(not run_tests(**kwargs)[0])
     finally:
         logger.shutdown()
         logger.remove_handler(handler)
+
+    # Reserve everything above 64 for our global usage.
+    assert 0 <= rv < 64, "Exit codes above 64 are reserved"
+    if logged_critical.has_log:
+        print("Did log critical")
+        rv = 64
+
     return rv
 
 

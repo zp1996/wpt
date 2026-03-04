@@ -1,5 +1,7 @@
 <!doctype html>
 <meta charset=utf-8>
+<meta name="variant" content="?interop-2026">
+<meta name="variant" content="?rest">
 <meta name="timeout" content="long">
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
@@ -8,6 +10,8 @@
 <script src="simulcast/simulcast.js"></script>
 <script>
 'use strict';
+const rest = !new URLSearchParams(location.search).has("interop-2026");
+const interop2026 = !new URLSearchParams(location.search).has("rest");
 
 async function hasStats(pc, type) {
   const report = await pc.getStats();
@@ -19,12 +23,12 @@ async function hasStats(pc, type) {
   return false;
 }
 
-async function getInboundRtpPollUntilItExists(pc, kTimeoutMs = 10000) {
+async function getStatsTypePollUntilItExists(pc, type, kTimeoutMs = 10000) {
   const t0 = performance.now();
   while (performance.now() - t0 < kTimeoutMs) {
     const report = await pc.getStats();
     for (const stats of report.values()) {
-      if (stats.type == 'inbound-rtp') {
+      if (stats.type == type) {
         return stats;
       }
     }
@@ -32,6 +36,7 @@ async function getInboundRtpPollUntilItExists(pc, kTimeoutMs = 10000) {
   return null;
 }
 
+if (rest) {
 promise_test(async t => {
   const pc = new RTCPeerConnection();
   t.add_cleanup(() => pc.close());
@@ -43,7 +48,9 @@ promise_test(async t => {
   assert_false(await hasStats(pc, 'outbound-rtp'),
               'outbound-rtp does not exist in have-local-offer');
 }, `RTCOutboundRtpStreamStats does not exist as early as have-local-offer`);
+}
 
+if (interop2026) {
 // This test does not exchange ICE candidates, meaning no packets are sent.
 // We should still see outbound-rtp stats because they are created by the O/A.
 promise_test(async t => {
@@ -95,7 +102,9 @@ promise_test(async t => {
   assert_not_equals(outboundRtpBar, undefined);
   assert_not_equals(outboundRtpBar.ssrc, undefined);
 }, `RTCOutboundRtpStreamStats exists per simulcast encoding`);
+}
 
+if (rest) {
 promise_test(async t => {
   const pc1 = new RTCPeerConnection();
   t.add_cleanup(() => pc1.close());
@@ -118,7 +127,7 @@ promise_test(async t => {
   const [track] = stream.getTracks();
   t.add_cleanup(() => track.stop());
   await sender.replaceTrack(track);
-  const inboundRtp = await getInboundRtpPollUntilItExists(pc2);
+  const inboundRtp = await getStatsTypePollUntilItExists(pc2, 'inbound-rtp');
   assert_not_equals(
       inboundRtp, null,
       'inbound-rtp should be created in response to the sender having a track');
@@ -127,6 +136,79 @@ promise_test(async t => {
       'inbound-rtp must only exist after packets have been received');
 }, `RTCInboundRtpStreamStats are created by packet reception`);
 
+[{name: "pc", statsSource: pc => pc, kind: "audio"},
+ {name: "sender", statsSource: pc => pc.getSenders()[0], kind: "audio"},
+ {name: "pc", statsSource: pc => pc, kind: "video"},
+ {name: "sender", statsSource: pc => pc.getSenders()[0], kind: "video"}
+].forEach(({name, statsSource, kind}) => promise_test(async t => {
+  const pc1 = new RTCPeerConnection();
+  t.add_cleanup(() => pc1.close());
+  const pc2 = new RTCPeerConnection();
+  t.add_cleanup(() => pc2.close());
+  pc1.onicecandidate = e => pc2.addIceCandidate(e.candidate);
+  pc2.onicecandidate = e => pc1.addIceCandidate(e.candidate);
+
+  // Check statsSource for the outbound-rtp stats object.
+  const getOutboundRtpStats = async () =>
+    await getStatsTypePollUntilItExists(statsSource(pc1), 'outbound-rtp');
+
+  pc1.addTransceiver(kind);
+  await pc1.setLocalDescription();
+  await pc2.setRemoteDescription(pc1.localDescription);
+  await pc2.setLocalDescription();
+  await pc1.setRemoteDescription(pc2.localDescription);
+
+  {
+    const stats = await getOutboundRtpStats();
+    assert_not_equals(
+      stats, null,
+      `outbound-rtp should be created in ${name}.getStats() in response to the pc.addTransceiver("${kind}")`);
+  }
+}, `RTCOutboundRtpStreamStats exist in ${name}.getStats() after created with a null track through pc.addTransceiver("${kind}")`));
+
+[{name: "pc", statsSource: pc => pc},
+ {name: "sender", statsSource: pc => pc.getSenders()[0]}
+].forEach(({name, statsSource}) => promise_test(async t => {
+  const pc1 = new RTCPeerConnection();
+  t.add_cleanup(() => pc1.close());
+  const pc2 = new RTCPeerConnection();
+  t.add_cleanup(() => pc2.close());
+  pc1.onicecandidate = e => pc2.addIceCandidate(e.candidate);
+  pc2.onicecandidate = e => pc1.addIceCandidate(e.candidate);
+
+  // Check statsSource for the outbound-rtp stats object.
+  const getOutboundRtpStats = async () =>
+    await getStatsTypePollUntilItExists(statsSource(pc1), 'outbound-rtp');
+
+  const stream = await getNoiseStream({video:true});
+
+  const {sender} = pc1.addTransceiver(stream.getTracks()[0]);
+  await pc1.setLocalDescription();
+  await pc2.setRemoteDescription(pc1.localDescription);
+  await pc2.setLocalDescription();
+  await pc1.setRemoteDescription(pc2.localDescription);
+
+  // Wait for packets to be received
+  {
+    const stats = await getOutboundRtpStats();
+    assert_not_equals(
+      stats, null,
+      `outbound-rtp should be created in ${name}.getStats() in response to the sender having a track`);
+  }
+
+  // Stop sending. This should not remove the outbound-rtp stats object.
+  await sender.replaceTrack(null);
+  // Check that the outbound-rtp stats object remains.
+  {
+    const stats = await getOutboundRtpStats();
+    assert_not_equals(
+        stats, null,
+        `outbound-rtp should remain in ${name}.getStats() after sender.replaceTrack(null)`);
+  }
+}, `RTCOutboundRtpStreamStats remain in ${name}.getStats() after sender.replaceTrack(null)`));
+}
+
+if (interop2026) {
 promise_test(async t => {
   const pc1 = new RTCPeerConnection();
   t.add_cleanup(() => pc1.close());
@@ -164,7 +246,7 @@ promise_test(async t => {
   // But because of early media, we're still able to receive packets.
   // - Whether or not we unmute the track in response to this is outside the
   //   scope of this test.
-  const inboundRtp = await getInboundRtpPollUntilItExists(pc1);
+  const inboundRtp = await getStatsTypePollUntilItExists(pc1, 'inbound-rtp');
   assert_not_equals(
       inboundRtp, null,
       'inbound-rtp should be created in the early media use case');
@@ -172,4 +254,5 @@ promise_test(async t => {
       inboundRtp.packetsReceived, 0,
       'inbound-rtp must only exist after packets have been received');
 }, `RTCInboundRtpStreamStats exists for early media`);
+}
 </script>

@@ -21,7 +21,9 @@ def main(request, response):
 
     test_session_manager = session_manager.find_for_request(request)
 
-    header_items = ["(RS256)",'challenge="login_challenge_value"',f'path="{registration_url}"']
+    header_items = ["(RS256)",f'path="{registration_url}"']
+    if test_session_manager.get_allows_challenges():
+        header_items.append('challenge="login_challenge_value"')
     authorization_value = test_session_manager.get_authorization_value()
     if authorization_value is not None:
         header_items.append(f'authorization="{authorization_value}"')
@@ -37,7 +39,7 @@ def main(request, response):
 
     registrations = []
     for i in range(num_sessions):
-        registrations.append(('Sec-Session-Registration', ";".join(header_items)))
+        registrations.append(('Secure-Session-Registration', ";".join(header_items)))
 
     headers = []
     if request.headers.get(b"origin") is not None:
@@ -50,7 +52,7 @@ def main(request, response):
         ]
 
     if use_single_header:
-        combined_registrations = [("Sec-Session-Registration", ", ".join([registration[1] for registration in registrations]))]
+        combined_registrations = [("Secure-Session-Registration", ", ".join([registration[1] for registration in registrations]))]
         return (200, headers + combined_registrations, "")
     else:
         return (200, headers + registrations, "")
